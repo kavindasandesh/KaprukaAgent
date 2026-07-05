@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+
+# PyCharm/IDE settings
+.idea/
+
+# Environment variables and secrets
+.env
+
+# Temporary Chainlit data
+.files/
