@@ -7,11 +7,9 @@ from google.genai import errors
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
 
-# Initialize your Gemini Client securely using environment variables
+# We load the API key here, but we DO NOT initialize the Gemini client globally anymore!
 os.environ["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "YOUR_PLACEHOLDER_KEY")
-gemini_client = genai.Client()
 
-# Optimized prompt instructing Gemini to format items clearly and leverage context memory
 VISUAL_SYSTEM_PROMPT = (
     "You are a premium, highly helpful shopping assistant for Kapruka Sri Lanka.\n"
     "You have a perfect memory of this conversation. If a user refers to 'the 2nd item' or 'that cake', look back at your previous responses to see what it was.\n\n"
@@ -27,7 +25,6 @@ VISUAL_SYSTEM_PROMPT = (
 
 
 def clean_mcp_schema(schema_dict):
-    """Recursively removes boolean values from JSON schemas to prevent SDK crashes."""
     if not isinstance(schema_dict, dict):
         return schema_dict
     cleaned = {}
@@ -44,9 +41,6 @@ def clean_mcp_schema(schema_dict):
 
 
 async def render_response(raw_text: str):
-    """Parses product blocks. Shows a clean text list for multiple items,
-    and only renders a single visual image card when one specific item is isolated.
-    """
     if not raw_text:
         return
 
@@ -55,16 +49,12 @@ async def render_response(raw_text: str):
         re.DOTALL)
     products = product_pattern.findall(raw_text)
 
-    # Case 1: No product structures, just standard conversational text
     if not products:
         await cl.Message(content=raw_text).send()
         return
 
-    # Extract any introductory/conversational text from the response
     clean_text = product_pattern.sub("", raw_text).strip()
 
-    # Case 2: Multiple products found (e.g., a search list).
-    # Group them into a single clean text message instead of spamming multiple image blocks.
     if len(products) > 1:
         list_content = clean_text + "\n\n" if clean_text else ""
         for i, (title, img_url, price, desc) in enumerate(products, 1):
@@ -73,8 +63,6 @@ async def render_response(raw_text: str):
         await cl.Message(content=list_content.strip()).send()
         return
 
-    # Case 3: Exactly ONE product found (user selected or specified a single item).
-    # Render the single product along with its unblocked image card.
     if len(products) == 1:
         title, img_url, price, desc = products[0]
         title = title.strip()
@@ -101,23 +89,23 @@ async def render_response(raw_text: str):
 
 @cl.on_chat_start
 async def start():
-    # Initialize an empty conversation history list for this specific user session
     cl.user_session.set("history", [])
 
 
 @cl.on_message
 async def handle_message(message: cl.Message):
-    # Retrieve existing conversation history strings
-    history = cl.user_session.get("history", [])
+    # Initialize the client safely INSIDE the async event loop!
+    gemini_client = genai.Client()
 
-    # Append the user's incoming prompt to the context record
+    history = cl.user_session.get("history", [])
     history.append(f"User: {message.content}")
 
     status_message = cl.Message(content="Connecting to Kapruka database...")
     await status_message.send()
 
+    # Changed "npx.cmd" to "npx" so it works on Render's Linux servers
     server_params = StdioServerParameters(
-        command="npx.cmd",
+        command="npx",
         args=["-y", "mcp-remote", "https://mcp.kapruka.com/mcp"]
     )
 
@@ -132,7 +120,6 @@ async def handle_message(message: cl.Message):
             status_message.content = "Analyzing request history..."
             await status_message.update()
 
-            # Pass the full consolidated text history array straight to Gemini
             prompt_context = "\n".join(history)
 
             try:
@@ -175,11 +162,9 @@ async def handle_message(message: cl.Message):
             else:
                 final_text = response.text
 
-            # Clean up status widgets and render the output (with image rules handled)
             await status_message.remove()
             await render_response(final_text)
 
-            # Append the model's finalized response into history for the next turn
             if final_text:
                 history.append(f"Assistant: {final_text}")
                 cl.user_session.set("history", history)
