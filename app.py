@@ -7,7 +7,7 @@ from google.genai import errors
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
 
-# We load the API key here, but we DO NOT initialize the Gemini client globally anymore!
+# Load the API key from environment variables safely
 os.environ["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "YOUR_PLACEHOLDER_KEY")
 
 VISUAL_SYSTEM_PROMPT = (
@@ -55,6 +55,7 @@ async def render_response(raw_text: str):
 
     clean_text = product_pattern.sub("", raw_text).strip()
 
+    # Case 1: Multiple products found (Search results list)
     if len(products) > 1:
         list_content = clean_text + "\n\n" if clean_text else ""
         for i, (title, img_url, price, desc) in enumerate(products, 1):
@@ -63,6 +64,7 @@ async def render_response(raw_text: str):
         await cl.Message(content=list_content.strip()).send()
         return
 
+    # Case 2: Exactly ONE product isolated
     if len(products) == 1:
         title, img_url, price, desc = products[0]
         title = title.strip()
@@ -72,17 +74,24 @@ async def render_response(raw_text: str):
 
         content_markdown = f"{clean_text}\n\n### 🎁 {title}\n**Price:** {price}\n\n* {desc}" if clean_text else f"### 🎁 {title}\n**Price:** {price}\n\n* {desc}"
         elements = []
+        image_rendered_via_element = False
 
         if img_url.startswith("http"):
             async with httpx.AsyncClient() as client:
                 try:
-                    response = await client.get(img_url, timeout=10.0)
+                    # Increased timeout to 15 seconds for slower cloud routing environments
+                    response = await client.get(img_url, timeout=15.0)
                     if response.status_code == 200:
                         elements.append(
                             cl.Image(name=title, content=response.content, display="inline", size="large")
                         )
+                        image_rendered_via_element = True
                 except Exception as e:
-                    print(f"Image fetch failed for {title}: {e}")
+                    print(f"Server-side image fetch failed: {e}. Falling back to standard markdown formatting.")
+
+        # Fallback: If server-side download fails or times out, embed a standard markdown image link
+        if not image_rendered_via_element and img_url.startswith("http"):
+            content_markdown += f"\n\n![{title}]({img_url})"
 
         await cl.Message(content=content_markdown.strip(), elements=elements).send()
 
@@ -94,7 +103,6 @@ async def start():
 
 @cl.on_message
 async def handle_message(message: cl.Message):
-    # Initialize the client safely INSIDE the async event loop!
     gemini_client = genai.Client()
 
     history = cl.user_session.get("history", [])
@@ -103,7 +111,6 @@ async def handle_message(message: cl.Message):
     status_message = cl.Message(content="Connecting to Kapruka database...")
     await status_message.send()
 
-    # Changed "npx.cmd" to "npx" so it works on Render's Linux servers
     server_params = StdioServerParameters(
         command="npx",
         args=["-y", "mcp-remote", "https://mcp.kapruka.com/mcp"]
