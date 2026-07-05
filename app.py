@@ -72,14 +72,21 @@ async def render_response(raw_text: str):
         price = price.strip()
         desc = desc.strip()
 
+        # FIX 1: Automatically upgrade HTTP to HTTPS to bypass browser Mixed-Content blocks
+        if img_url.startswith("http://"):
+            img_url = img_url.replace("http://", "https://")
+
         content_markdown = f"{clean_text}\n\n### 🎁 {title}\n**Price:** {price}\n\n* {desc}" if clean_text else f"### 🎁 {title}\n**Price:** {price}\n\n* {desc}"
         elements = []
         image_rendered_via_element = False
 
-        if img_url.startswith("http"):
-            async with httpx.AsyncClient() as client:
+        if img_url.startswith("https://"):
+            # FIX 2: Emulate a standard web browser user-agent to bypass automated script blocks
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+            async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
                 try:
-                    # Increased timeout to 15 seconds for slower cloud routing environments
                     response = await client.get(img_url, timeout=15.0)
                     if response.status_code == 200:
                         elements.append(
@@ -87,10 +94,10 @@ async def render_response(raw_text: str):
                         )
                         image_rendered_via_element = True
                 except Exception as e:
-                    print(f"Server-side image fetch failed: {e}. Falling back to standard markdown formatting.")
+                    print(f"Server-side image proxy fetch failed: {e}")
 
-        # Fallback: If server-side download fails or times out, embed a standard markdown image link
-        if not image_rendered_via_element and img_url.startswith("http"):
+        # Fallback to direct embedding if proxying fails
+        if not image_rendered_via_element and img_url.startswith("https://"):
             content_markdown += f"\n\n![{title}]({img_url})"
 
         await cl.Message(content=content_markdown.strip(), elements=elements).send()
